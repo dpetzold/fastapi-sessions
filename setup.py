@@ -10,4 +10,7 @@ setup(
     author="Jordan Isaacs",
     url="https://github.com/jordanisaacs/fastapi-sessions",
     install_requires=["fastapi", "itsdangerous", "pydantic"],
+    extras_require={
+        "dynamodb": ["boto3", "dynaconf"],
+    },
 )
