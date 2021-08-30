@@ -1,15 +1,14 @@
-import sys
 from uuid import UUID, uuid4
 
 from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
-sys.path.append("..")
-
-from fastapi_sessions.backends.implementations import DynamoDbBackend  # noqa
-from fastapi_sessions.frontends.implementations import CookieParameters  # noqa
-from fastapi_sessions.frontends.implementations import SessionCookie  # noqa
-from fastapi_sessions.session_verifier import SessionVerifier  # noqa
+from fastapi_sessions.backends.implementations import DynamoDbBackend
+from fastapi_sessions.frontends.implementations import (
+    CookieParameters,
+    SessionCookie,
+)
+from fastapi_sessions.session_verifier import SessionVerifier
 
 
 class SessionData(BaseModel):

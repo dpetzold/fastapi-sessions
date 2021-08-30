@@ -30,20 +30,21 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     @property
     def resource(self):
-        return boto3.resource("dynamodb", region_name=settings.get("AWS_REGION"))
+        return self.aws_session.resource("dynamodb", region_name=settings.AWS_REGION)
 
     @property
     def table(self):
-        return self.resource.Table(self.table_name)
+        return self.resource.Table(settings.DYNAMODB_TABLE_NAME)
 
     def get(self, session_id):
         return self.table.query(
-            KeyConditionExpression=(Key("session_id").eq(session_id)),
+            KeyConditionExpression=(Key("SessionId").eq(str(session_id))),
         )["Items"]
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
-        item.update({"SessionId": session_id})
+        item.update({"SessionId": str(session_id)})
+        print(item)
         self.table.put_item(Item=item)
 
     async def create(self, session_id: ID, data: SessionModel):
