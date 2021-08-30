@@ -6,3 +6,6 @@ poetry.lock
 dist/
 test_server/
 fastapi_sessions.egg-info/
+
+# Ignore dynaconf secret files
+.secrets.*

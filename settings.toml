@@ -1,0 +1,3 @@
+[default]
+AWS_REGION=us-east-1
+AWS_PROFILE_NAME=personal
