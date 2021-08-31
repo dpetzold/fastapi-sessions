@@ -7,8 +7,6 @@ from boto3.dynamodb.conditions import Key
 
 from typing import Generic
 
-from config import settings
-
 from fastapi_sessions.backends.session_backend import (
     BackendError,
     SessionBackend,
@@ -25,6 +23,8 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
     aws_profile_name: str
     table_name: str
 
+    service_name: str = "dynamodb"
+
     @property
     def aws_session(self):
         return boto3.session.Session(
@@ -34,11 +34,11 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     @property
     def dynamodb_client(self):
-        return self.aws_session.client("dynamodb")
+        return self.aws_session.client(self.service_name)
 
     @property
     def dynamodb_resource(self):
-        return self.aws_session.resource("dynamodb")
+        return self.aws_session.resource(self.service_name)
 
     @property
     def table(self):
