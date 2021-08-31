@@ -79,7 +79,11 @@ async def create_session(name: str, response: Response):
     session = uuid4()
     data = SessionData(username=name)
 
-    await backend.create(session, data)
+    try:
+        await backend.create(session, data)
+    except ValueError as exc:
+        return str(exc)
+
     cookie.attach_to_response(response, session)
 
     return f"created session for {name}"

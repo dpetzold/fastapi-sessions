@@ -35,7 +35,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     @property
     def table(self):
-        return self.resource.Table(settings.DYNAMODB_TABLE_NAME)
+        return self.resource.Table(settings.DYNAMODB_SESSION_TABLE_NAME)
 
     def get(self, session_id):
         return self.table.query(
@@ -44,18 +44,54 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
+
+        ttl = int(
+            (datetime.datetime.utcnow() + datetime.timedelta(days=14)).timestamp()
+        )
+
         item.update(
             {
                 "SessionId": str(session_id),
-                "ttl": int(
-                    (
-                        datetime.datetime.utcnow() + datetime.timedelta(days=14)
-                    ).timestamp()
-                ),
+                "ttl": ttl,
             }
         )
-        print(item)
-        self.table.put_item(Item=item)
+
+        serializer = boto3.dynamodb.types.TypeSerializer()
+        low_level_copy = {k: serializer.serialize(v) for k, v in python_data.items()}
+
+        # Enforce uniqueness
+        # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
+
+        try:
+            self.dynamodb_client.transact_write_items(
+                TransactItems=[
+                    {
+                        "Put": {
+                            "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
+                            "ConditionExpression": "attribute_not_exists(SessionId)",
+                            "Item": {
+                                "SessionId": {"S": item["SessionId"]},
+                                "ttl": {"N": str(item["ttl"])},
+                                "username": {"S": item["username"]},
+                            },
+                        }
+                    },
+                    {
+                        "Put": {
+                            "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
+                            "ConditionExpression": "attribute_not_exists(SessionId)",
+                            "Item": {
+                                "SessionId": {"S": f"username#{item['username']}"}
+                            },
+                        }
+                    },
+                ]
+            )
+        except (
+            Exception,
+            self.dynamodb_client.exceptions.TransactionCanceledException,
+        ):
+            raise ValueError(f"username exists {item['username']}")
 
     async def create(self, session_id: ID, data: SessionModel):
         """Create a new session entry."""
