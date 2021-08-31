@@ -1,6 +1,7 @@
 """InMemoryBackend implementation."""
 import datetime
 import boto3
+from botocore.exceptions import ClientError
 from boto3.dynamodb.conditions import Key
 
 from typing import Generic
@@ -91,10 +92,12 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 ]
             )
         except (
-            Exception,  # XXX: The correct exception catch is not working
+            ClientError,  # XXX: The correct exception catch is not working
             self.dynamodb_client.exceptions.TransactionCanceledException,
-        ):
-            raise ValueError(f"username exists {item['username']}")
+        ) as exc:
+            if exc.response["Error"]["Code"] == "TransactionCanceledException":
+                raise ValueError(f"username {item['username']} exists")
+            raise exc
 
     async def create(self, session_id: ID, data: SessionModel):
         """Create a new session entry."""
