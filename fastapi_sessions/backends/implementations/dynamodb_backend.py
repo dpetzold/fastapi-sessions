@@ -38,9 +38,12 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         return self.resource.Table(settings.DYNAMODB_SESSION_TABLE_NAME)
 
     def get(self, session_id):
-        return self.table.query(
+        items = self.table.query(
             KeyConditionExpression=(Key("SessionId").eq(str(session_id))),
         )["Items"]
+        if items:
+            return items[0]
+        return None
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
@@ -57,7 +60,6 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         )
 
         serializer = boto3.dynamodb.types.TypeSerializer()
-        low_level_copy = {k: serializer.serialize(v) for k, v in python_data.items()}
 
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
@@ -70,9 +72,8 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                             "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
-                                "SessionId": {"S": item["SessionId"]},
-                                "ttl": {"N": str(item["ttl"])},
-                                "username": {"S": item["username"]},
+                                key: serializer.serialize(value)
+                                for key, value in item.items()
                             },
                         }
                     },
@@ -81,14 +82,16 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                             "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
-                                "SessionId": {"S": f"username#{item['username']}"}
+                                "SessionId": serializer.serialize(
+                                    f"username#{item['username']}"
+                                ),
                             },
                         }
                     },
                 ]
             )
         except (
-            Exception,
+            Exception,  # XXX: The correct exception catch is not working
             self.dynamodb_client.exceptions.TransactionCanceledException,
         ):
             raise ValueError(f"username exists {item['username']}")
@@ -111,4 +114,9 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     async def delete(self, session_id: ID) -> None:
         """Delete the session"""
-        return self.table.delete_item(Key={"SessionId": str(session_id)})
+        session = self.get(session_id)
+        if not session:
+            raise BackendError("session does not exist, cannot delete")
+
+        self.table.delete_item(Key={"SessionId": str(session_id)})
+        self.table.delete_item(Key={"SessionId": f"username#{session['username']}"})
