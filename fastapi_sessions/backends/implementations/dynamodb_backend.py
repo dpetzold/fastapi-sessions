@@ -21,22 +21,26 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     @property
     def aws_session(self):
-        return boto3.session.Session(profile_name=settings.get("AWS_PROFILE_NAME"))
-
-    def aws_client(self, service):
-        return self.aws_session.client(service)
+        return boto3.session.Session(
+            profile_name=settings.get("AWS_PROFILE_NAME"),
+            region_name=settings.AWS_REGION,
+        )
 
     @property
     def dynamodb_client(self):
-        return self.aws_client("dynamodb")
+        return self.aws_session.client("dynamodb")
 
     @property
-    def resource(self):
-        return self.aws_session.resource("dynamodb", region_name=settings.AWS_REGION)
+    def dynamodb_resource(self):
+        return self.aws_session.resource("dynamodb")
+
+    @property
+    def table_name(self):
+        return settings.DYNAMODB_SESSION_TABLE_NAME
 
     @property
     def table(self):
-        return self.resource.Table(settings.DYNAMODB_SESSION_TABLE_NAME)
+        return self.dynamodb_resource.Table(self.table_name)
 
     def get(self, session_id):
         items = self.table.query(
@@ -70,7 +74,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 TransactItems=[
                     {
                         "Put": {
-                            "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
+                            "TableName": self.table_name,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
                                 key: serializer.serialize(value)
@@ -80,7 +84,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                     },
                     {
                         "Put": {
-                            "TableName": settings.DYNAMODB_SESSION_TABLE_NAME,
+                            "TableName": self.table_name,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
                                 "SessionId": serializer.serialize(
@@ -121,5 +125,25 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         if not session:
             raise BackendError("session does not exist, cannot delete")
 
-        self.table.delete_item(Key={"SessionId": str(session_id)})
-        self.table.delete_item(Key={"SessionId": f"username#{session['username']}"})
+        serializer = boto3.dynamodb.types.TypeSerializer()
+
+        self.dynamodb_client.transact_write_items(
+            TransactItems=[
+                {
+                    "Delete": {
+                        "TableName": self.table_name,
+                        "Key": {"SessionId": serializer.serialize(str(session_id))},
+                    },
+                },
+                {
+                    "Delete": {
+                        "TableName": self.table_name,
+                        "Key": {
+                            "SessionId": serializer.serialize(
+                                f"username#{session['username']}"
+                            )
+                        },
+                    }
+                },
+            ]
+        )
