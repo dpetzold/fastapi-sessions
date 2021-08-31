@@ -1,4 +1,5 @@
 """InMemoryBackend implementation."""
+import datetime
 import boto3
 from boto3.dynamodb.conditions import Key
 
@@ -43,7 +44,16 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
-        item.update({"SessionId": str(session_id)})
+        item.update(
+            {
+                "SessionId": str(session_id),
+                "ttl": int(
+                    (
+                        datetime.datetime.utcnow() + datetime.timedelta(days=14)
+                    ).timestamp()
+                ),
+            }
+        )
         print(item)
         self.table.put_item(Item=item)
 
@@ -65,4 +75,4 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     async def delete(self, session_id: ID) -> None:
         """Delete the session"""
-        return self.table.delete_item(Key={"SessionId": session_id})
+        return self.table.delete_item(Key={"SessionId": str(session_id)})
