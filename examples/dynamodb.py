@@ -3,6 +3,7 @@ from uuid import UUID, uuid4
 from fastapi import Depends, FastAPI, HTTPException, Response
 from pydantic import BaseModel
 
+from fastapi_sessions.backends.session_backend import BackendError
 from fastapi_sessions.backends.implementations import DynamoDbBackend
 from fastapi_sessions.frontends.implementations import (
     CookieParameters,
@@ -81,7 +82,7 @@ async def create_session(name: str, response: Response):
 
     try:
         await backend.create(session, data)
-    except ValueError as exc:
+    except BackendError as exc:
         return str(exc)
 
     cookie.attach_to_response(response, session)

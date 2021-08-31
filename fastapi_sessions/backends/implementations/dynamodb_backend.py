@@ -100,7 +100,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
             self.dynamodb_client.exceptions.TransactionCanceledException,
         ) as exc:
             if exc.response["Error"]["Code"] == "TransactionCanceledException":
-                raise ValueError(f"username {item['username']} exists")
+                raise BackendError(f"username {item['username']} exists")
             raise exc
 
     async def create(self, session_id: ID, data: SessionModel):
