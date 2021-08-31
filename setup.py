@@ -9,6 +9,7 @@ setup(
     long_description=open("readme.md").read(),
     author="Jordan Isaacs",
     url="https://github.com/jordanisaacs/fastapi-sessions",
+    tests_require=["pytest", "requests"],
     install_requires=["fastapi", "itsdangerous", "pydantic"],
     extras_require={
         "dynamodb": ["boto3", "dynaconf"],

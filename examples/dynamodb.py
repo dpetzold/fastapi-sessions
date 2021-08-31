@@ -11,6 +11,8 @@ from fastapi_sessions.frontends.implementations import (
 )
 from fastapi_sessions.session_verifier import SessionVerifier
 
+from config import settings
+
 
 class SessionData(BaseModel):
     username: str
@@ -26,7 +28,12 @@ cookie = SessionCookie(
     secret_key="DONOTUSE",
     cookie_params=cookie_params,
 )
-backend = DynamoDbBackend[UUID, SessionData]()
+
+backend = DynamoDbBackend[UUID, SessionData](
+    aws_region=settings.AWS_REGION,
+    aws_profile_name=settings.get("AWS_PROFILE_NAME"),
+    table_name=settings.DYNAMODB_SESSION_TABLE_NAME,
+)
 
 
 class BasicVerifier(SessionVerifier[UUID, SessionData]):

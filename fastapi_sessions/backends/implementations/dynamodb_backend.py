@@ -1,4 +1,5 @@
-"""InMemoryBackend implementation."""
+"""DynamoDB implementation."""
+from dataclasses import dataclass
 import datetime
 import boto3
 from botocore.exceptions import ClientError
@@ -16,14 +17,19 @@ from fastapi_sessions.backends.session_backend import (
 from fastapi_sessions.frontends.session_frontend import ID
 
 
+@dataclass
 class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel]):
     """Stores session data in a dictionary."""
+
+    aws_region: str
+    aws_profile_name: str
+    table_name: str
 
     @property
     def aws_session(self):
         return boto3.session.Session(
-            profile_name=settings.get("AWS_PROFILE_NAME"),
-            region_name=settings.AWS_REGION,
+            profile_name=self.aws_profile_name,
+            region_name=self.aws_region,
         )
 
     @property
@@ -35,12 +41,12 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         return self.aws_session.resource("dynamodb")
 
     @property
-    def table_name(self):
-        return settings.DYNAMODB_SESSION_TABLE_NAME
-
-    @property
     def table(self):
         return self.dynamodb_resource.Table(self.table_name)
+
+    @property
+    def serializer(self):
+        return boto3.dynamodb.types.TypeSerializer()
 
     def get(self, session_id):
         items = self.table.query(
@@ -52,19 +58,16 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
-
-        ttl = int(
-            (datetime.datetime.utcnow() + datetime.timedelta(days=14)).timestamp()
-        )
-
         item.update(
             {
                 "SessionId": str(session_id),
-                "ttl": ttl,
+                "ttl": int(
+                    (
+                        datetime.datetime.utcnow() + datetime.timedelta(days=14)
+                    ).timestamp()
+                ),
             }
         )
-
-        serializer = boto3.dynamodb.types.TypeSerializer()
 
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
@@ -77,7 +80,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                             "TableName": self.table_name,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
-                                key: serializer.serialize(value)
+                                key: self.serializer.serialize(value)
                                 for key, value in item.items()
                             },
                         }
@@ -87,7 +90,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                             "TableName": self.table_name,
                             "ConditionExpression": "attribute_not_exists(SessionId)",
                             "Item": {
-                                "SessionId": serializer.serialize(
+                                "SessionId": self.serializer.serialize(
                                     f"username#{item['username']}"
                                 ),
                             },
@@ -125,21 +128,21 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         if not session:
             raise BackendError("session does not exist, cannot delete")
 
-        serializer = boto3.dynamodb.types.TypeSerializer()
-
         self.dynamodb_client.transact_write_items(
             TransactItems=[
                 {
                     "Delete": {
                         "TableName": self.table_name,
-                        "Key": {"SessionId": serializer.serialize(str(session_id))},
+                        "Key": {
+                            "SessionId": self.serializer.serialize(str(session_id))
+                        },
                     },
                 },
                 {
                     "Delete": {
                         "TableName": self.table_name,
                         "Key": {
-                            "SessionId": serializer.serialize(
+                            "SessionId": self.serializer.serialize(
                                 f"username#{session['username']}"
                             )
                         },
