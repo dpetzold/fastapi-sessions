@@ -72,31 +72,37 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
 
+        transact_items = [
+            {
+                "Put": {
+                    "TableName": self.table_name,
+                    "ConditionExpression": "attribute_not_exists(SessionId)",
+                    "Item": {
+                        key: self.serializer.serialize(value)
+                        for key, value in item.items()
+                    },
+                }
+            },
+        ]
+
+        if item.get("username"):
+            transact_items.append(
+                {
+                    "Put": {
+                        "TableName": self.table_name,
+                        "ConditionExpression": "attribute_not_exists(SessionId)",
+                        "Item": {
+                            "SessionId": self.serializer.serialize(
+                                f"username#{item['username']}"
+                            ),
+                        },
+                    }
+                }
+            )
+
         try:
             self.dynamodb_client.transact_write_items(
-                TransactItems=[
-                    {
-                        "Put": {
-                            "TableName": self.table_name,
-                            "ConditionExpression": "attribute_not_exists(SessionId)",
-                            "Item": {
-                                key: self.serializer.serialize(value)
-                                for key, value in item.items()
-                            },
-                        }
-                    },
-                    {
-                        "Put": {
-                            "TableName": self.table_name,
-                            "ConditionExpression": "attribute_not_exists(SessionId)",
-                            "Item": {
-                                "SessionId": self.serializer.serialize(
-                                    f"username#{item['username']}"
-                                ),
-                            },
-                        }
-                    },
-                ]
+                TransactItems=transact_items,
             )
         except (
             ClientError,  # XXX: The correct exception catch is not working
@@ -106,7 +112,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 raise BackendError(f"username {item['username']} exists")
             raise exc
 
-    async def create(self, session_id: ID, data: SessionModel):
+    async def create(self, session_id: ID, data: SessionModel = None):
         """Create a new session entry."""
         if self.get(session_id):
             raise BackendError("create can't overwrite an existing session")
