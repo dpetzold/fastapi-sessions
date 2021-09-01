@@ -1,12 +1,12 @@
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request, Response
 
 from pydantic import BaseModel
 
-from starlette.types import ASGIApp, Message, Receive, Scope, Send
-from starlette.datastructures import MutableHeaders
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
+from starlette.types import ASGIApp
 
 from fastapi_sessions.backends.session_backend import BackendError
 from fastapi_sessions.backends.implementations import DynamoDbBackend
@@ -59,7 +59,7 @@ class BasicVerifier(SessionVerifier[UUID, SessionData]):
 
 
 @dataclass
-class SessionDataMiddleware:
+class SessionDataMiddleware(BaseHTTPMiddleware):
 
     app: ASGIApp
     secret_key: str
@@ -70,6 +70,7 @@ class SessionDataMiddleware:
     cookie_name = "cookie"
 
     def __post_init__(self):
+        super().__init__(self.app)
         self.security_flags = "httponly; samesite=" + self.same_site
         if self.https_only:  # Secure flag can be used with HTTPS only
             self.security_flags += "; secure"
@@ -104,31 +105,18 @@ class SessionDataMiddleware:
             table_name=settings.DYNAMODB_SESSION_TABLE_NAME,
         )
 
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
 
-        if scope["type"] not in ("http"):  # pragma: no cover
-            await self.app(scope, receive, send)
-            return
+        response = await call_next(request)
 
-        async def send_wrapper(message: Message) -> None:
-            if message["type"] == "http.response.start":
+        session = uuid4()
 
-                session = uuid4()
+        try:
+            await self.backend.create(session)
+        except BackendError as exc:
+            return str(exc)
 
-                try:
-                    await self.backend.create(session)
-                except BackendError as exc:
-                    return str(exc)
-
-                headers = MutableHeaders(scope=message)
-                headers.set_cookie(
-                    key=self.cookie_name,
-                    value=str(self.cookie.signer.dumps(session.hex)),
-                    **dict(self.cookie.cookie_params),
-                )
-
-                # self.cookie.attach_to_response(scope, session)
-
-            await send(message)
-
-        await self.app(scope, receive, send_wrapper)
+        self.cookie.attach_to_response(response, session)
+        return response
