@@ -24,6 +24,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
     table_name: str
 
     service_name: str = "dynamodb"
+    partition_key: str = "session_id"
 
     @property
     def aws_session(self):
@@ -50,7 +51,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     def get(self, session_id):
         items = self.table.query(
-            KeyConditionExpression=(Key("SessionId").eq(str(session_id))),
+            KeyConditionExpression=(Key(self.partition_key).eq(str(session_id))),
         )["Items"]
         if items:
             return items[0]
@@ -60,7 +61,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         item = data.dict() if data else {}
         item.update(
             {
-                "SessionId": str(session_id),
+                self.partition_key: str(session_id),
                 "ttl": int(
                     (
                         datetime.datetime.utcnow() + datetime.timedelta(days=14)
@@ -72,11 +73,13 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
 
+        condition_expression = f"attribute_not_exists({self.partition_key})"
+
         transact_items = [
             {
                 "Put": {
                     "TableName": self.table_name,
-                    "ConditionExpression": "attribute_not_exists(SessionId)",
+                    "ConditionExpression": condition_expression,
                     "Item": {
                         key: self.serializer.serialize(value)
                         for key, value in item.items()
@@ -90,9 +93,9 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 {
                     "Put": {
                         "TableName": self.table_name,
-                        "ConditionExpression": "attribute_not_exists(SessionId)",
+                        "ConditionExpression": condition_expression,
                         "Item": {
-                            "SessionId": self.serializer.serialize(
+                            "session_id": self.serializer.serialize(
                                 f"username#{item['username']}"
                             ),
                         },
@@ -124,9 +127,9 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     async def update(self, session_id: ID, data: SessionModel) -> None:
         """Update an existing session."""
-        if self.get(session_id):
-            self.put(session_id, data)
-        raise BackendError("session does not exist, cannot update")
+        if not self.get(session_id):
+            raise BackendError("session does not exist, cannot update")
+        self.put(session_id, data)
 
     async def delete(self, session_id: ID) -> None:
         """Delete the session"""
@@ -140,7 +143,9 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                     "Delete": {
                         "TableName": self.table_name,
                         "Key": {
-                            "SessionId": self.serializer.serialize(str(session_id))
+                            self.partition_key: self.serializer.serialize(
+                                str(session_id)
+                            )
                         },
                     },
                 },
@@ -148,7 +153,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                     "Delete": {
                         "TableName": self.table_name,
                         "Key": {
-                            "SessionId": self.serializer.serialize(
+                            self.partition_key: self.serializer.serialize(
                                 f"username#{session['username']}"
                             )
                         },

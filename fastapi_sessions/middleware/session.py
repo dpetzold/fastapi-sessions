@@ -1,3 +1,6 @@
+import logging
+import typing
+from decimal import Decimal
 from dataclasses import dataclass
 from uuid import UUID, uuid4
 
@@ -19,8 +22,14 @@ from fastapi_sessions.session_verifier import SessionVerifier
 from config import settings
 
 
+logger = logging.getLogger(__name__)
+logger.info(__name__)
+
+
 class SessionData(BaseModel):
-    username: str
+    session_id: str
+    username: typing.Optional[str] = None
+    ttl: Decimal = None
 
 
 class BasicVerifier(SessionVerifier[UUID, SessionData]):
@@ -63,11 +72,11 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
 
     app: ASGIApp
     secret_key: str
-    session_cookie: str = "session"
     max_age: int = 14 * 24 * 60 * 60  # 14 days, in seconds
     same_site: str = "lax"
     https_only: bool = False
-    cookie_name = "cookie"
+    cookie_name = "session-data"
+    identifier = "general_verifier"
 
     def __post_init__(self):
         super().__init__(self.app)
@@ -79,7 +88,7 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
     @property
     def verifier(self):
         return BasicVerifier(
-            identifier="general_verifier",
+            identifier=self.identifier,
             auto_error=True,
             backend=self.backend,
             auth_http_exception=HTTPException(
@@ -91,7 +100,7 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
     def cookie(self):
         return SessionCookie(
             cookie_name=self.cookie_name,
-            identifier="general_verifier",
+            identifier=self.identifier,
             auto_error=True,
             secret_key=self.secret_key,
             cookie_params=self.cookie_params,
@@ -105,12 +114,7 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
             table_name=settings.DYNAMODB_SESSION_TABLE_NAME,
         )
 
-    async def dispatch(
-        self, request: Request, call_next: RequestResponseEndpoint
-    ) -> Response:
-
-        response = await call_next(request)
-
+    async def create_session(self, request: Request, response: Response):
         session = uuid4()
 
         try:
@@ -118,5 +122,40 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
         except BackendError as exc:
             return str(exc)
 
+        request.state.session_data = SessionData(
+            session_id=str(session),
+        )
+
         self.cookie.attach_to_response(response, session)
+        logger.info(f"Created session {str(session)}")
+
+    async def get_session(self, request: Request):
+        session_id = self.cookie(request)
+        logger.info(session_id)
+        data = self.backend.get(session_id)
+
+        logger.info(data)
+
+        request.state.session_data = SessionData(
+            **data,
+        )
+
+        logger.info(request.state.session_data)
+
+    async def save_session(self, session_id: str, session_data: SessionData):
+        self.backend.update(session_id, session_data)
+
+    async def dispatch(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+
+        cookie = request.cookies.get(self.cookie_name)
+        if cookie:
+            await self.get_session(request)
+
+        response = await call_next(request)
+
+        if not cookie:
+            await self.create_session(request, response)
+
         return response
