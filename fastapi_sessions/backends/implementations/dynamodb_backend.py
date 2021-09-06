@@ -53,22 +53,9 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
     def serializer(self):
         return boto3.dynamodb.types.TypeSerializer()
 
-    def get(self, session_id):
-        items = self.table.query(
-            KeyConditionExpression=(Key(self.partition_key).eq(str(session_id))),
-        )["Items"]
-        if items:
-            return items[0]
-        return None
-
     def write_items(self, transact_items):
         logger.debug(transact_items)
 
-        self.dynamodb_client.transact_write_items(
-            TransactItems=transact_items,
-        )
-
-        """
         try:
             self.dynamodb_client.transact_write_items(
                 TransactItems=transact_items,
@@ -80,7 +67,6 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
             if exc.response["Error"]["Code"] == "TransactionCanceledException":
                 raise BackendError("username exists")
             raise exc
-        """
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
@@ -113,32 +99,49 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
             },
         ]
 
-        if item.get("username"):
-            transact_items.append(
-                {
-                    "Put": {
-                        "TableName": self.table_name,
-                        "ConditionExpression": condition_expression,
-                        "Item": {
-                            "session_id": self.serializer.serialize(
-                                f"username#{item['username']}"
-                            ),
-                        },
+        """
+        username = item.get("username")
+        if username:
+            user_item = self._get("username", username)
+            logger.debug(user_item)
+            if not user_item:
+                transact_items.append(
+                    {
+                        "Put": {
+                            "TableName": self.table_name,
+                            "ConditionExpression": condition_expression,
+                            "Item": {
+                                "session_id": self.serializer.serialize(
+                                    user_session_id
+                                ),
+                            },
+                        }
                     }
-                }
-            )
+                )
+        """
 
         self.write_items(transact_items)
 
+    def _get(self, key, value):
+        items = self.table.query(
+            KeyConditionExpression=(Key(key).eq(str(value))),
+        )["Items"]
+        if items:
+            return items[0]
+        return None
+
+    def get(self, value):
+        return self._get(self.partition_key, value)
+
     async def create(self, session_id: ID, data: SessionModel = None):
         """Create a new session entry."""
-        if self.get(session_id):
+        if self._get(self.partition_key, session_id):
             raise BackendError("create can't overwrite an existing session")
         self.put(session_id, data)
 
     async def read(self, session_id: ID):
         """Read an existing session data."""
-        return self.get(session_id)
+        return self._get(self.partition_key, session_id)
 
     async def update(self, session_id: ID, data: SessionModel) -> None:
         """Update an existing session."""
@@ -157,13 +160,13 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
 
-        update_expressions = [
-            f"{key} = :{key}"
-            for key in item.keys()
-            if key not in (self.partition_key, "ttl")
-        ]
-
-        update_expression = ", ".join(update_expressions)
+        update_expression = ", ".join(
+            [
+                f"{key} = :{key}"
+                for key in item.keys()
+                if key not in (self.partition_key, "ttl")
+            ]
+        )
 
         expression_attribute_values = {
             f":{key}": self.serializer.serialize(value)
@@ -176,28 +179,31 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 "Update": {
                     "TableName": self.table_name,
                     "Key": {self.partition_key: {"S": session_id}},
+                    "ConditionExpression": "attribute_not_exists(username)",
                     "UpdateExpression": f"SET {update_expression}",
                     "ExpressionAttributeValues": expression_attribute_values,
                 }
             },
         ]
 
-        condition_expression = f"attribute_not_exists({self.partition_key})"
-
+        """
         if item.get("username"):
-            transact_items.append(
-                {
-                    "Put": {
-                        "TableName": self.table_name,
-                        # "ConditionExpression": condition_expression,
-                        "Item": {
-                            "session_id": self.serializer.serialize(
-                                f"username#{item['username']}"
-                            ),
-                        },
+            user_item = self.get("username", username)
+            logger.debug(user_item)
+            if not user_item:
+                transact_items.append(
+                    {
+                        "Put": {
+                            "TableName": self.table_name,
+                            "Item": {
+                                "session_id": self.serializer.serialize(
+                                    user_session_id
+                                ),
+                            },
+                        }
                     }
-                }
-            )
+                )
+        """
 
         self.write_items(transact_items)
 
