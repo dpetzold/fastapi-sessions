@@ -157,19 +157,19 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         # Enforce uniqueness
         # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
 
-        update_expressions = []
-        for key in item.keys():
-            if key in (self.partition_key, "ttl"):
-                continue
-            update_expressions.append(f"{key} = :{key}")
+        update_expressions = [
+            f"{key} = :{key}"
+            for key in item.keys()
+            if key not in (self.partition_key, "ttl")
+        ]
 
         update_expression = ", ".join(update_expressions)
 
-        expression_attribute_values = {}
-        for key, value in item.items():
-            if key in (self.partition_key, "ttl"):
-                continue
-            expression_attribute_values[f":{key}"] = self.serializer.serialize(value)
+        expression_attribute_values = {
+            f":{key}": self.serializer.serialize(value)
+            for key, value in item.items()
+            if key not in (self.partition_key, "ttl")
+        }
 
         transact_items = [
             {
@@ -181,6 +181,23 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 }
             },
         ]
+
+        condition_expression = f"attribute_not_exists({self.partition_key})"
+
+        if item.get("username"):
+            transact_items.append(
+                {
+                    "Put": {
+                        "TableName": self.table_name,
+                        # "ConditionExpression": condition_expression,
+                        "Item": {
+                            "session_id": self.serializer.serialize(
+                                f"username#{item['username']}"
+                            ),
+                        },
+                    }
+                }
+            )
 
         self.write_items(transact_items)
 
