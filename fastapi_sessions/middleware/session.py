@@ -142,8 +142,8 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
 
         logger.info(request.state.session_data)
 
-    async def save_session(self, session_id: str, session_data: SessionData):
-        self.backend.update(session_id, session_data)
+    async def save_session(self, session_data: SessionData):
+        await self.backend.update(session_data.session_id, session_data)
 
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
@@ -155,7 +155,9 @@ class SessionDataMiddleware(BaseHTTPMiddleware):
 
         response = await call_next(request)
 
-        if not cookie:
+        if cookie:
+            await self.save_session(request.state.session_data)
+        else:
             await self.create_session(request, response)
 
         return response

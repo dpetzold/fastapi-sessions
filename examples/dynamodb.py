@@ -57,6 +57,8 @@ async def create_session(request: Request, response: Response):
 async def create_session_name(username: str, request: Request, response: Response):
     if hasattr(request.state, "session_data"):
         request.state.session_data.username = username
+    else:
+        logger.error("no session_data for request")
 
     return f"created session for {username}"
 

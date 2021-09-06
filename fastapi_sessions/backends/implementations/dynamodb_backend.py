@@ -1,4 +1,5 @@
 """DynamoDB implementation."""
+import logging
 from dataclasses import dataclass
 import datetime
 import boto3
@@ -13,6 +14,9 @@ from fastapi_sessions.backends.session_backend import (
     SessionModel,
 )
 from fastapi_sessions.frontends.session_frontend import ID
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -56,6 +60,27 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
         if items:
             return items[0]
         return None
+
+    def write_items(self, transact_items):
+        logger.debug(transact_items)
+
+        self.dynamodb_client.transact_write_items(
+            TransactItems=transact_items,
+        )
+
+        """
+        try:
+            self.dynamodb_client.transact_write_items(
+                TransactItems=transact_items,
+            )
+        except (
+            ClientError,  # XXX: The correct exception catch is not working
+            self.dynamodb_client.exceptions.TransactionCanceledException,
+        ) as exc:
+            if exc.response["Error"]["Code"] == "TransactionCanceledException":
+                raise BackendError("username exists")
+            raise exc
+        """
 
     def put(self, session_id, data: SessionModel = None):
         item = data.dict() if data else {}
@@ -103,17 +128,7 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
                 }
             )
 
-        try:
-            self.dynamodb_client.transact_write_items(
-                TransactItems=transact_items,
-            )
-        except (
-            ClientError,  # XXX: The correct exception catch is not working
-            self.dynamodb_client.exceptions.TransactionCanceledException,
-        ) as exc:
-            if exc.response["Error"]["Code"] == "TransactionCanceledException":
-                raise BackendError(f"username {item['username']} exists")
-            raise exc
+        self.write_items(transact_items)
 
     async def create(self, session_id: ID, data: SessionModel = None):
         """Create a new session entry."""
@@ -127,9 +142,47 @@ class DynamoDbBackend(Generic[ID, SessionModel], SessionBackend[ID, SessionModel
 
     async def update(self, session_id: ID, data: SessionModel) -> None:
         """Update an existing session."""
-        if not self.get(session_id):
-            raise BackendError("session does not exist, cannot update")
-        self.put(session_id, data)
+        item = data.dict() if data else {}
+        item.update(
+            {
+                self.partition_key: str(session_id),
+                "ttl": int(
+                    (
+                        datetime.datetime.utcnow() + datetime.timedelta(days=14)
+                    ).timestamp()
+                ),
+            }
+        )
+
+        # Enforce uniqueness
+        # https://aws.amazon.com/blogs/database/simulating-amazon-dynamodb-unique-constraints-using-transactions/
+
+        update_expressions = []
+        for key in item.keys():
+            if key in (self.partition_key, "ttl"):
+                continue
+            update_expressions.append(f"{key} = :{key}")
+
+        update_expression = ", ".join(update_expressions)
+
+        expression_attribute_values = {}
+        for key, value in item.items():
+            if key in (self.partition_key, "ttl"):
+                continue
+            expression_attribute_values[f":{key}"] = self.serializer.serialize(value)
+
+        transact_items = [
+            {
+                "Update": {
+                    "TableName": self.table_name,
+                    "Key": {self.partition_key: {"S": session_id}},
+                    "UpdateExpression": f"SET {update_expression}",
+                    "ExpressionAttributeValues": expression_attribute_values,
+                }
+            },
+        ]
+
+        self.write_items(transact_items)
 
     async def delete(self, session_id: ID) -> None:
         """Delete the session"""
